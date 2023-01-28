@@ -1,0 +1,127 @@
+#!/bin/bash
+
+# 解析http参数
+# 你应该使用source的方式运行本脚本
+# 如你的接口代码为：
+# ```
+# #!/bin/bash
+# . parse_param
+# echo "$HTTP_PARAM_user"
+# ```
+# 则会输出调用你的接口时传入的user参数的值
+#
+# 你的接口里可以使用HTTP_PARAMKEYS（数组）查看调用你的接口时传入的所有参数的键名字
+
+if [ "$ALREADY_PARSE" != "yes" ]; then  # 没有解析过才进行, 防止反复解析
+
+ALREADY_PARSE=yes
+
+HTTP_PARAMPREFIX=${HTTP_PARAMPREFIX:-"HTTP_PARAM_"}
+HTTP_PARAMKEYS=()
+HTTP_PARAMJSON=""
+
+# 解析包含在url里的http参数
+# 参数1 url参数字符串, 如abc=123&def=456
+parse:x-www-from-urlencoded()
+{
+    local params=$1
+    local old_IFS=$IFS
+    IFS="&"
+    params=($params)
+    IFS=$old_IFS
+    local param key value
+    for param in "${params[@]}"; do
+        key=${param%%=*}
+        value=${param#*=}
+        eval "${HTTP_PARAMPREFIX}${key}=\$value"
+        HTTP_PARAMKEYS[${#HTTP_PARAMKEYS[@]}]=$key
+    done
+}
+
+# 解析表单参数
+parse:form-data()
+{
+    local split_line key value
+    local temp_file=$(mktemp)
+    local temp_file1=$(mktemp)
+    read split_line
+    split_line=${split_line//$'\r'/}
+    cat >"$temp_file"
+    while :; do
+        sed -n "1,/^$split_line/p" -- "$temp_file" >"$temp_file1"
+        if ! grep -q -- "^$split_line" "$temp_file1"; then
+            break
+        fi
+        sed -i "1,/^$split_line/d" -- "$temp_file"
+        key=$(sed -n "1,/^[\r]*\$/p" -- "$temp_file1" | grep -i "^Content-Disposition:" | sed -r "s/.*[^a-zA-Z]name=\"([^\"]*)\".*/\1/g")
+        value=$(sed "1,/^[\r]*\$/d; \$d; s/\r//g" -- "$temp_file1")
+        eval "${HTTP_PARAMPREFIX}${key}=\$value"
+        HTTP_PARAMKEYS[${#HTTP_PARAMKEYS[@]}]=$key
+    done
+    rm -f "$temp_file"
+    rm -f "$temp_file1"
+}
+
+# 解析json参数
+parse:json()
+{
+    HTTP_PARAMJSON=$(cat)
+    local keys=$(echo "$HTTP_PARAMJSON" | jq -r "keys | .[]")
+    local key value
+    for key in $keys; do
+        value=$(echo "$HTTP_PARAMJSON" | jq -r ".$key")
+        eval "${HTTP_PARAMPREFIX}${key}=\$value"
+        HTTP_PARAMKEYS[${#HTTP_PARAMKEYS[@]}]=$key
+    done
+}
+
+if [ "$REQUEST_METHOD" == "GET" ]; then
+    parse:x-www-from-urlencoded "$QUERY_STRING"
+else
+    if echo "$CONTENT_TYPE" | grep -qi "form-data"; then
+        parse:form-data
+    elif echo "$CONTENT_TYPE" | grep -qi "json"; then
+        parse:json
+    else
+        parse:x-www-from-urlencoded "$(cat)"
+    fi
+fi
+
+if [ "$0" == "$BASH_SOURCE" ]; then # 如果是被调用而非source则把所有解析到的参数都打印出来
+    echo "Content-Type: text/plain"
+    echo
+    if [ -n "$HTTP_PARAMJSON" ]; then
+        echo -n "传入的参数类型为json, 所有的键: "
+        echo "$HTTP_PARAMJSON" | jq "keys | .[]" | tr "\n" " "
+        echo
+        echo "json原始数据:"
+        echo "$HTTP_PARAMJSON" | jq
+    fi
+    echo "传入的参数 (如果是json类型只获取第一级键作为参数名字):"
+    for key in "${HTTP_PARAMKEYS[@]}"; do
+        eval "echo \"${key}: \${${HTTP_PARAMPREFIX}${key}}\""
+    done
+fi
+
+print:json()
+{
+    if [ -n "$HTTP_PARAMJSON" ]; then
+        echo "$HTTP_PARAMJSON"
+        return 0
+    fi
+    local is_first="yes"
+    echo -n "{"
+    for key in "${HTTP_PARAMKEYS[@]}"; do
+        if [ "$is_first" == "yes" ]; then
+            is_first="no"
+        else
+            echo -n ", "
+        fi
+        echo -n "\"$key\": \""
+        eval "echo -n \"\${${HTTP_PARAMPREFIX}${key}}\""
+        echo -n "\""
+    done
+    echo "}"
+}
+
+fi  # if [ "$ALREADY_PARSE" != "yes" ]

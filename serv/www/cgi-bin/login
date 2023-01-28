@@ -1,0 +1,57 @@
+#!/bin/bash
+
+. parse_param
+
+# 用户列表文件 /home/apache/userlist
+# 格式
+# ```
+# pan_用户名1=密码
+# pan_用户名2=密码
+# ...
+# ```
+# 注意这个用户列表文件的用户和用户组都要为apache, 并且需要关闭selinux, 否则无法读取
+# 用户cookie文件夹 /home/apache/cookie
+# cookie文件夹的用户和用户组要为apache
+# ```bash
+# chown apache:apache /home/apache/userlist
+# chown apache:apache /home/apache/cookie
+# setenforce 0
+# ```
+
+./check_login >/dev/null && . if_exit false "已经登录了, 如需要切换用户请先退出当前登录"
+
+[ -z "$HTTP_PARAM_user" ] && . if_exit false "请传入用户名"
+[ -z "$HTTP_PARAM_password" ] && . if_exit false "请传入密码"
+
+. /home/apache/userlist
+
+eval "real_password=\$pan_${HTTP_PARAM_user}"
+[ -z "$real_password" ] && . if_exit false "用户不存在"
+[ "$real_password" != "$HTTP_PARAM_password" ] && . if_exit false "密码不正确"
+
+# 冲突下线
+for cookie in $(ls "/home/apache/cookie/"); do
+    if [ "$(cat "/home/apache/cookie/$cookie")" == "$HTTP_PARAM_user" ]; then
+        # 已经有cookie文件, 清理掉, 即冲突下线
+        rm -f "/home/apache/cookie/$cookie"
+    fi
+done
+
+token_a=$(date +%s)
+if [ $? -ne 0 ]; then
+    . if_exit false "服务器异常, 无法计算日期"
+fi
+token_b=$(uuidgen)
+if [ $? -ne 0 ]; then
+    . if_exit false "服务器异常, 无法生成uuid"
+fi
+
+token="${token_a}#${token_b}"
+
+if ! echo "$HTTP_PARAM_user" >"/home/apache/cookie/$token"; then
+    . if_exit false "服务器异常, 无法保存登录信息"
+fi
+
+echo "Set-Cookie: token=$token"
+
+. if_exit true "" "{\"token\": \"$token\"}"

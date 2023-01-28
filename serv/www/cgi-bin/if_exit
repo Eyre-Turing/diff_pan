@@ -1,0 +1,33 @@
+#!/bin/bash
+
+. parse_param
+
+if [ "$0" == "$BASH_SOURCE" ]; then
+cat << EOF
+Content-Type: text/plain
+
+这个接口不能主动调用
+EOF
+    exit 0
+fi
+
+IF_SUCCESS=$1
+IF_MESSAGE=$2
+IF_DATA=${3:-"{}"}
+
+cat << EOF
+Content-Type: application/json
+
+{
+    "interface": "${0#"/var/www"*}",
+    "success": ${IF_SUCCESS},
+    "param": $(print:json),
+    "data": ${IF_DATA},
+    "message": "${IF_MESSAGE}"
+}
+EOF
+
+if [ "$IF_SUCCESS" == "true" ]; then
+    exit 0
+fi
+exit 1

@@ -1,0 +1,23 @@
+#!/bin/bash
+
+token=$(echo "$HTTP_COOKIE" | sed -r "s/.*([^a-zA-Z]token|^token)=([^;]*).*/\2/g")
+
+# 清除已经过期的登录
+LOGIN_TIMEOUT=600   # 登录过期时间(单位: 秒), 10分钟
+for cookie in $(ls "/home/apache/cookie/"); do
+    token_date=$(stat -c %Y -- "/home/apache/cookie/$cookie")
+    if (( $(date +%s) - token_date > LOGIN_TIMEOUT )); then
+        # 登录状态过期, 删除cookie
+        rm -f "/home/apache/cookie/$cookie"
+    fi
+done
+
+if [ ! -f "/home/apache/cookie/$token" ]; then
+    . if_exit false "未登录"
+fi
+
+touch -m "/home/apache/cookie/$token"
+
+if [ "$0" == "$BASH_SOURCE" ]; then # 如果是被调用而非source则输出登录状态信息
+    . if_exit true "已经登录" "{\"token\": \"$token\", \"user\": \"$(cat "/home/apache/cookie/$token")\"}"
+fi
